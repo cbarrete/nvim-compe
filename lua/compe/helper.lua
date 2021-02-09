@@ -1,4 +1,5 @@
 local Pattern = require'compe.pattern'
+local Character = require'compe.completion'
 
 local Helper = {}
 
@@ -33,9 +34,14 @@ Helper.get_default_pattern = function()
 end
 
 --- convert_lsp
-Helper.convert_lsp = function(request_position, response)
+Helper.convert_lsp = function(args)
+  local context = args.context
+  local request = args.request
+  local response = args.response
+
   local completion_items = vim.tbl_islist(response or {}) and response or response.items or {}
 
+  local offset = context.col
   local complete_items = {}
   for _, completion_item in pairs(completion_items) do
     local word = ''
@@ -53,7 +59,6 @@ Helper.convert_lsp = function(request_position, response)
       if word ~= text then
         abbr = abbr .. '~'
       end
-      word = string.match(text, '[^%s=%(%$"\']+')
     else
       word = completion_item.insertText or completion_item.label
       abbr = completion_item.label
@@ -61,13 +66,31 @@ Helper.convert_lsp = function(request_position, response)
     word = string.gsub(string.gsub(word, '^%s*', ''), '%s*$', '')
     abbr = string.gsub(string.gsub(abbr, '^%s*', ''), '%s*$', '')
 
+    -- determine item offset.
+    if completion_item.textEdit then
+      -- overlapped textEdit
+      for idx = completion_item.textEdit.range.start.character + 1, #context.before_line do
+        if not string.match(string.sub(context.before_line, idx, idx), '%s') then
+          if string.find(word, string.sub(context.before_line, idx, -1), 1, true) == 1 then
+            offset = math.min(offset, idx)
+          end
+          break
+        end
+      end
+    elseif request.context and request.context.triggerKind == 2 then
+      -- overlapped trigger character
+      if context.before_char == string.sub(word, 1, 1) then
+        offset = math.min(offset, context.col - 1)
+      end
+    end
+
     table.insert(complete_items, {
       word = word;
       abbr = abbr;
       kind = vim.lsp.protocol.CompletionItemKind[completion_item.kind] or nil;
       user_data = {
         compe = {
-          request_position = request_position;
+          request_position = request.position;
           completion_item = completion_item;
         };
       };
@@ -76,9 +99,11 @@ Helper.convert_lsp = function(request_position, response)
       preselect = completion_item.preselect or false;
     })
   end
+
   return {
     items = complete_items,
     incomplete = response.incomplete or false,
+    offset = context.col ~= offset and offset or nil,
   }
 end
 
